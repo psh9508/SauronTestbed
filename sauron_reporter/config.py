@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from sauron_python import sauron_sdk
+
 from sauron_reporter.reporter import PROJECT_ROOT, SauronReporter
 
 
@@ -26,5 +28,20 @@ def reporter_from_env(require_key: bool = True) -> SauronReporter:
     return SauronReporter(
         base_url=os.environ.get("SAURON_BASE_URL", "http://127.0.0.1:8002"),
         repository_key=key,
+        repository_url=os.environ.get("SAURON_REPOSITORY_URL") or None,
+    )
+
+
+def init_sdk_from_env() -> None:
+    """같은 .env 설정으로 sauron-python SDK를 초기화한다."""
+    load_env()
+    key = os.environ.get("SAURON_REPOSITORY_KEY", "")
+    if not key:
+        raise SystemExit(
+            "SAURON_REPOSITORY_KEY가 비어 있습니다. register_repo.py로 저장소를 등록하고 .env에 public_key를 넣으세요."
+        )
+    sauron_sdk.init(
+        repository_key=key,
+        endpoint=os.environ.get("SAURON_BASE_URL", "http://127.0.0.1:8002").rstrip("/") + "/analyze",
         repository_url=os.environ.get("SAURON_REPOSITORY_URL") or None,
     )

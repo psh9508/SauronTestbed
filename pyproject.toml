@@ -4,4 +4,9 @@ version = "0.1.0"
 description = "Sample app with intentional bugs for smoke-testing Sauron error analysis"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "sauron-python>=0.3.1",
+]
+
+[tool.uv.sources]
+sauron-python = { path = "../Sauron-Python", editable = true }
