@@ -1,12 +1,9 @@
 [project]
 name = "sauron-testbed"
 version = "0.1.0"
-description = "Sample app with intentional bugs for smoke-testing Sauron error analysis"
+description = "Sample shop app for Sauron end-to-end testing"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "sauron-python>=0.3.1",
+    "sentry-sdk>=2.74.0",
 ]
-
-[tool.uv.sources]
-sauron-python = { path = "../Sauron-Python", editable = true }

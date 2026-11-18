@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-from sauron_reporter.config import reporter_from_env
+from sauron_reporter.config import client_from_env
 
 
 def main() -> int:
@@ -35,7 +35,7 @@ def main() -> int:
     sub.add_parser("list")
     args = parser.parse_args()
 
-    client = reporter_from_env(require_key=False)
+    client = client_from_env()
 
     if args.cmd == "list":
         status, body = client.request("GET", "/source_control/repositories")

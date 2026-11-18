@@ -11,7 +11,6 @@ def place_order(user_id: int, items: list[dict], coupon_code: str | None = None)
     logger.info("placing order user=%s items=%s coupon=%s", user_id, items, coupon_code)
     total = 0
     for item in items:
-        # BUG: quantity를 검증 없이 int()로 변환 → "two" 같은 값이면 ValueError
         quantity = int(item["quantity"])
         product = get_product(item["product_id"])
         if product["stock"] < quantity:

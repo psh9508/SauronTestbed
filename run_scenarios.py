@@ -1,19 +1,36 @@
-"""버그 시나리오를 실행해 발생한 에러를 Sauron에 보내고 분석 결과를 출력한다.
+"""시나리오를 실행해 발생한 에러를 sentry-sdk로 Sauron에 보내고 분석 결과를 출력한다.
 
   uv run python run_scenarios.py --list
   uv run python run_scenarios.py                      # 전체 시나리오
   uv run python run_scenarios.py zero_stock bad_quantity
   uv run python run_scenarios.py --no-wait            # 전송만 하고 폴링하지 않음
-  uv run python run_scenarios.py --dry-run            # 전송 없이 payload만 출력
+  uv run python run_scenarios.py --dry-run            # 전송 없이 sentry 이벤트만 출력
 """
 import argparse
-import json
 import logging
 import sys
 
+import sentry_sdk
+
 from sauron_reporter import SauronError
-from sauron_reporter.config import reporter_from_env
+from sauron_reporter.config import init_sentry_from_env
 from scenarios import MESSAGE_SCENARIOS, SCENARIOS
+
+
+def _send_scenario(name: str) -> bool:
+    """시나리오를 실행해 에러를 sentry로 보낸다. 예외가 나지 않으면 False."""
+    # 시나리오마다 breadcrumbs를 새로 쌓는다
+    sentry_sdk.get_isolation_scope().clear_breadcrumbs()
+
+    if name in MESSAGE_SCENARIOS:
+        logging.getLogger("shop.orders").error(MESSAGE_SCENARIOS[name])
+        return True
+    try:
+        SCENARIOS[name]()
+    except Exception:
+        sentry_sdk.capture_exception()
+        return True
+    return False
 
 
 def main() -> int:
@@ -21,7 +38,7 @@ def main() -> int:
     parser.add_argument("names", nargs="*", help="실행할 시나리오 이름 (기본: 전체)")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--no-wait", action="store_true", help="job 완료를 기다리지 않음")
-    parser.add_argument("--dry-run", action="store_true", help="Sauron에 보내지 않고 payload만 출력")
+    parser.add_argument("--dry-run", action="store_true", help="Sauron에 보내지 않고 sentry 이벤트만 출력")
     parser.add_argument("--timeout", type=float, default=300.0, help="job 대기 시간(초)")
     args = parser.parse_args()
 
@@ -35,51 +52,40 @@ def main() -> int:
     if unknown:
         parser.error(f"unknown scenario: {', '.join(unknown)}")
 
-    reporter = reporter_from_env(require_key=not args.dry_run)
-    reporter.install_breadcrumbs()
+    client = init_sentry_from_env(dry_run=args.dry_run)
+    release = sentry_sdk.get_client().options.get("release")
+    print(f"release(git_commit_sha)={release or '(없음: default branch)'}")
 
     jobs: list[tuple[str, str]] = []
     failed = 0
     for name in names:
         print(f"\n===== {name} =====")
-        reporter.breadcrumbs.records.clear()
-
-        if name in MESSAGE_SCENARIOS:
-            error_type, message = MESSAGE_SCENARIOS[name]
-            logging.getLogger("shop.orders").error(message)
-            payload = reporter.build_message_payload(error_type, message)
-        else:
-            try:
-                SCENARIOS[name]()
-            except Exception as exc:
-                payload = reporter.build_exception_payload(exc)
-            else:
-                print("  예외가 발생하지 않았습니다 (버그가 고쳐졌나요?)")
-                failed += 1
-                continue
-
-        event = payload["event"]
-        print(f"  {event['type']}: {event['value']}")
-        for frame in event["stacktrace"]:
-            print(f"    {frame['filename']}:{frame['lineno']} in {frame['function']}")
-        print(f"  fingerprint={payload['fingerprint']} breadcrumbs={len(payload['breadcrumbs'])}")
 
         if args.dry_run:
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            if not _send_scenario(name):
+                print("  예외가 발생하지 않았습니다")
+                failed += 1
+            sentry_sdk.flush()
             continue
 
         try:
-            data = reporter.send(payload)
-        except SauronError as e:
+            error = client.send_and_find(lambda: _send_scenario(name))
+        except (SauronError, TimeoutError) as e:
             print(f"  전송 실패: {e}")
             failed += 1
             continue
+        if error is None:
+            print("  예외가 발생하지 않았습니다")
+            failed += 1
+            continue
 
-        if "event_count" in data:
-            print(f"  기존 이벤트 (event_count={data['event_count']}) job_id={data['job_id']}")
+        job_id = error["analyze_job_id"]
+        if error["event_count"] > 1:
+            print(f"  기존 이벤트 (event_count={error['event_count']}) job_id={job_id}")
         else:
-            print(f"  queued job_id={data['job_id']}")
-        jobs.append((name, data["job_id"]))
+            print(f"  queued job_id={job_id}")
+        print(f"  fingerprint={error['fingerprint']}")
+        jobs.append((name, job_id))
 
     if args.no_wait or args.dry_run:
         return 1 if failed else 0
@@ -87,7 +93,7 @@ def main() -> int:
     for name, job_id in jobs:
         print(f"\n===== result: {name} ({job_id}) =====")
         try:
-            job = reporter.wait_for_job(job_id, timeout=args.timeout)
+            job = client.wait_for_job(job_id, timeout=args.timeout)
         except (SauronError, TimeoutError) as e:
             print(f"  {e}")
             failed += 1
